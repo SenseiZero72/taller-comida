@@ -34,7 +34,7 @@ const getScoreStyles = (type: ScoreType, score: string | number) => {
     return { backgroundColor: bg, color: '#000', label: 'NOVA GROUP' };
   }
 
-  return { backgroundColor: '#999999', color: 'white', label: type.toUpperCase() };
+  return { backgroundColor: '#999999', color: 'white', label: String(type).toUpperCase() };
 };
 
 export default function ScoreBadge({ type, score, variant = 'pill' }: ScoreBadgeProps) {

@@ -1,34 +1,133 @@
-import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useState } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { PRODUCTOS } from '../../src/data/productos';
-
-import ScoreBadge from '../../src/components/ScoreBadge';
+import { useState, useEffect, useRef } from 'react';
+import { FlatList, Pressable, StyleSheet, Text, TextInput, View, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { searchProducts, Producto } from '../../src/services/openFoodFacts';
+import { Ionicons } from '@expo/vector-icons';
+import ProductCard from '../../src/components/ProductCard';
+import BarcodeScanner from '../../src/components/BarcodeScanner';
 
 export default function SearchScreen() {
   const { category, tag, marca } = useLocalSearchParams<{ category?: string, tag?: string, marca?: string }>();
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState('');
+  const [products, setProducts] = useState<Producto[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isMoreLoading, setIsMoreLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [isScanning, setIsScanning] = useState(false);
+
+  const prevQueryRef = useRef(searchQuery);
+  const prevCategoryRef = useRef(category);
+  const prevTagRef = useRef(tag);
+  const prevMarcaRef = useRef(marca);
 
   const clearFilters = () => {
     setSearchQuery('');
     router.setParams({ category: '', tag: '', marca: '' });
   };
 
-  const filteredProducts = PRODUCTOS.filter(product => {
-    const matchesSearch = product.nombre.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesCategory = category
-      ? product.categoria.toLowerCase() === category.toLowerCase()
-      : true;
-    const matchesTag = tag
-      ? product.tags && product.tags.some(t => t.toLowerCase() === tag.toLowerCase())
-      : true;
-    const matchesMarca = marca
-      ? product.marcas && product.marcas.toLowerCase() === marca.toLowerCase()
-      : true;
-    return matchesSearch && matchesCategory && matchesTag && matchesMarca;
-  });
+  useEffect(() => {
+    let active = true;
+
+    const queryChanged =
+      searchQuery !== prevQueryRef.current ||
+      category !== prevCategoryRef.current ||
+      tag !== prevTagRef.current ||
+      marca !== prevMarcaRef.current;
+
+    const currentQuery = searchQuery;
+    const currentFilters = {
+      category: category || undefined,
+      tag: tag || undefined,
+      brand: marca || undefined
+    };
+
+    const fetchApiProducts = async (pageToFetch: number) => {
+      if (pageToFetch === 1) {
+        setIsLoading(true);
+      } else {
+        setIsMoreLoading(true);
+      }
+      setError(null);
+      try {
+        const results = await searchProducts(currentQuery, currentFilters, pageToFetch);
+        if (active) {
+          if (results.length < 24) {
+            setHasMore(false);
+          } else {
+            setHasMore(true);
+          }
+
+          if (pageToFetch === 1) {
+            setProducts(results);
+          } else {
+            setProducts(prev => {
+              // Evitar duplicados por ID
+              const existingIds = new Set(prev.map(p => p.id));
+              const newResults = results.filter(p => !existingIds.has(p.id));
+              return [...prev, ...newResults];
+            });
+          }
+        }
+      } catch (err) {
+        if (active) {
+          setError('Error al conectar con Open Food Facts. Revisa tu conexión.');
+        }
+      } finally {
+        if (active) {
+          setIsLoading(false);
+          setIsMoreLoading(false);
+        }
+      }
+    };
+
+    // Actualizar referencias
+    prevQueryRef.current = searchQuery;
+    prevCategoryRef.current = category;
+    prevTagRef.current = tag;
+    prevMarcaRef.current = marca;
+
+    let timerId: NodeJS.Timeout;
+
+    if (queryChanged) {
+      setProducts([]);
+      setHasMore(true);
+      setPage(1);
+
+      if (page === 1) {
+        timerId = setTimeout(() => {
+          fetchApiProducts(1);
+        }, 400);
+      }
+    } else {
+      if (page === 1) {
+        timerId = setTimeout(() => {
+          fetchApiProducts(1);
+        }, 400);
+      } else {
+        fetchApiProducts(page);
+      }
+    }
+
+    return () => {
+      active = false;
+      if (timerId) clearTimeout(timerId);
+    };
+  }, [searchQuery, category, tag, marca, page]);
+
+  const loadMore = () => {
+    if (!isLoading && !isMoreLoading && hasMore) {
+      setPage(prev => prev + 1);
+    }
+  };
+
+  const handleScanSuccess = (code: string) => {
+    setIsScanning(false);
+    router.push(`/producto?id=${code}`);
+  };
 
   const pageTitle = marca
     ? `Brand: ${marca.charAt(0).toUpperCase() + marca.slice(1)}`
@@ -38,31 +137,14 @@ export default function SearchScreen() {
         ? category.charAt(0).toUpperCase() + category.slice(1)
         : 'Products';
 
-  const renderProduct = ({ item }: { item: typeof PRODUCTOS[0] }) => (
-    <Pressable style={styles.card} onPress={() => router.push(`/producto?id=${item.id}`)}>
-      {item.imagen ? (
-        <Image
-          source={{ uri: item.imagen }}
-          style={styles.productImage}
-          contentFit="contain"
-          transition={200}
-        />
-      ) : (
-        <View style={styles.imagePlaceholder} />
-      )}
-      <View style={styles.cardContent}>
-        <Text style={styles.productName}>{item.nombre}</Text>
-        <Text style={styles.brandName}>{item.marcas?.toUpperCase()}</Text>
-        <View style={styles.badgesRow}>
-          <ScoreBadge type="nutri-score" score={item.nutriScore} />
-          <ScoreBadge type="eco-score" score={item.ecoScore} />
-        </View>
-      </View>
-      <View style={styles.chevronContainer}>
-        <Text style={styles.chevron}>›</Text>
-      </View>
-    </Pressable>
-  );
+  if (isScanning) {
+    return (
+      <BarcodeScanner
+        onScan={handleScanSuccess}
+        onClose={() => setIsScanning(false)}
+      />
+    );
+  }
 
   return (
     <View style={[styles.container]}>
@@ -74,26 +156,63 @@ export default function SearchScreen() {
           </Pressable>
         ) : null}
       </View>
-      <Text style={styles.itemCount}>{filteredProducts.length} ITEMS FOUND</Text>
+      
+      {!isLoading && !error && (
+        <Text style={styles.itemCount}>{products.length} ITEMS FOUND</Text>
+      )}
 
-      <View style={styles.searchContainer}>
-        <Text style={styles.searchIcon}>🔍</Text>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search products..."
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          placeholderTextColor="#999"
-        />
+      <View style={styles.searchRow}>
+        <View style={styles.searchContainer}>
+          <Text style={styles.searchIcon}>🔍</Text>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search products..."
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholderTextColor="#999"
+          />
+        </View>
+        <TouchableOpacity style={styles.scanButton} onPress={() => setIsScanning(true)}>
+          <Ionicons name="barcode-outline" size={24} color="#28884B" />
+        </TouchableOpacity>
       </View>
 
-      <FlatList
-        data={filteredProducts}
-        keyExtractor={(item) => item.id}
-        renderItem={renderProduct}
-        contentContainerStyle={[styles.listContainer]}
-        showsVerticalScrollIndicator={false}
-      />
+      {isLoading && products.length === 0 ? (
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color="#28884B" />
+          <Text style={styles.loadingText}>Cargando productos...</Text>
+        </View>
+      ) : error ? (
+        <View style={styles.centered}>
+          <Text style={styles.errorText}>{error}</Text>
+        </View>
+      ) : products.length === 0 ? (
+        <View style={styles.centered}>
+          <Text style={styles.noResultsText}>No se encontraron productos.</Text>
+        </View>
+      ) : (
+        <View style={{ flex: 1 }}>
+          <FlatList
+            data={products}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item }) => (
+              <ProductCard
+                item={item}
+                onPress={() => router.push(`/producto?id=${item.id}`)}
+              />
+            )}
+            contentContainerStyle={[styles.listContainer]}
+            showsVerticalScrollIndicator={false}
+            onEndReached={loadMore}
+            onEndReachedThreshold={0.5}
+            ListFooterComponent={
+              isMoreLoading ? (
+                <ActivityIndicator size="small" color="#28884B" style={styles.listLoader} />
+              ) : null
+            }
+          />
+        </View>
+      )}
     </View>
   );
 }
@@ -138,13 +257,13 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   searchContainer: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#F1F3F5',
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    marginBottom: 5,
   },
   searchIcon: {
     fontSize: 16,
@@ -157,58 +276,46 @@ const styles = StyleSheet.create({
     color: '#11181C',
   },
   listContainer: {
+    paddingBottom: 20,
   },
-  card: {
-    flexDirection: 'row',
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  imagePlaceholder: {
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-    backgroundColor: '#E9ECEF',
-    marginRight: 16,
-  },
-  productImage: {
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-    marginRight: 16,
-    backgroundColor: '#F8F9FA',
-  },
-  cardContent: {
+  centered: {
     flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingTop: 60,
   },
-  productName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#11181C',
-    marginBottom: 4,
-  },
-  brandName: {
-    fontSize: 12,
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
     color: '#687076',
-    marginBottom: 8,
   },
-  badgesRow: {
+  errorText: {
+    fontSize: 14,
+    color: '#ff4d4f',
+    textAlign: 'center',
+    paddingHorizontal: 20,
+  },
+  noResultsText: {
+    fontSize: 14,
+    color: '#687076',
+  },
+  listLoader: {
+    marginVertical: 10,
+  },
+  searchRow: {
     flexDirection: 'row',
-    gap: 8,
+    alignItems: 'center',
+    marginBottom: 12,
+    gap: 10,
   },
-  chevronContainer: {
-    marginLeft: 8,
-  },
-  chevron: {
-    fontSize: 24,
-    color: '#CED4DA',
-    lineHeight: 24,
+  scanButton: {
+    width: 46,
+    height: 46,
+    borderRadius: 8,
+    backgroundColor: '#E8F5E9',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#C8E6C9',
   },
 });
